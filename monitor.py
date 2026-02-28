@@ -13,7 +13,8 @@ def calculate_hash(file_path):
             for byte_block in iter(lambda: f.read(4096), b""):
                 sha256_hash.update(byte_block)
         return sha256_hash.hexdigest()
-    except FileNotFoundError:
+    except (FileNotFoundError, PermissionError, IsADirectoryError):
+        # Added extra error handling just in case the OS blocks access to a system file
         return None
 
 def load_baseline():
@@ -28,25 +29,45 @@ def load_baseline():
         return {} # Return empty if file is corrupted/empty
 
 def create_baseline():
-    target_file = input("Drag and drop the file to scan: ").strip('"')
-    file_hash = calculate_hash(target_file)
+    target_path = input("Drag and drop a file OR folder to scan: ").strip('"').strip("'")
     
-    if file_hash:
-        # 1. Load the existing database (Dictionary)
-        baseline_db = load_baseline()
+    baseline_db = load_baseline()
+    files_added = 0
+    
+    # Check if the user dropped a SINGLE FILE
+    if os.path.isfile(target_path):
+        file_hash = calculate_hash(target_path)
+        if file_hash:
+            baseline_db[target_path] = file_hash
+            files_added += 1
+            print(f"✅ Baseline UPDATED for file: {target_path}")
+            
+    # Check if the user dropped an ENTIRE FOLDER
+    elif os.path.isdir(target_path):
+        print(f"\n📂 Scanning directory: {target_path}...")
         
-        # 2. Add or Update the file in the dictionary
-        # The filename is the KEY, the hash is the VALUE
-        baseline_db[target_file] = file_hash
+        # os.walk hunts down every file in every sub-folder
+        for root, dirs, files in os.walk(target_path):
+            for file_name in files:
+                # Combine the folder path and file name to get the full exact path
+                full_file_path = os.path.join(root, file_name)
+                
+                file_hash = calculate_hash(full_file_path)
+                if file_hash:
+                    baseline_db[full_file_path] = file_hash
+                    files_added += 1
+                    
+        print(f"✅ Baseline UPDATED for {files_added} files in directory.")
         
-        # 3. Save the updated dictionary back to the JSON file
+    else:
+        print("❌ Error: Path not found or invalid.")
+        return
+
+    # If we successfully found and hashed files, save the updated database
+    if files_added > 0:
         with open(DB_FILE, "w") as f:
             json.dump(baseline_db, f, indent=4)
-            
-        print(f"\n✅ Baseline UPDATED for: {target_file}")
-        print(f"📂 Saved to {DB_FILE}")
-    else:
-        print("❌ Error: File not found.")
+        print(f"💾 Saved to {DB_FILE}")
 
 def monitor():
     print("\n🕵️‍♂️  Scanning ALL files in Smart Database...")
@@ -63,7 +84,7 @@ def monitor():
         current_hash = calculate_hash(saved_path)
 
         if current_hash is None:
-            print(f"🚨 DELETED: {saved_path}")
+            print(f"🚨 DELETED or UNREADABLE: {saved_path}")
         elif current_hash == saved_hash:
             print(f"✅ SAFE:    {saved_path}")
         else:
@@ -74,7 +95,7 @@ if __name__ == "__main__":
     
     while True:
         print("\n--------------------------------")
-        print("1. Add/Update File (Smart Database)")
+        print("1. Add/Update File or Folder (Smart Database)")
         print("2. Monitor Files")
         print("3. Exit")
         
